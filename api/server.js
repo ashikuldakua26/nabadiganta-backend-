@@ -1,15 +1,15 @@
 const express = require("express");
 const cors    = require("cors");
 
-const authRoutes          = require("./routes/auth.Routes");
-const adminRoutes         = require("./routes/admin.Routes");
-const branchManagerRoutes = require("./routes/brance-manager.Routes");
-const userRoutes          = require("./routes/user.Routes");
-const auditRoutes         = require("./routes/audit.Routes");
-const staffRoutes         = require("./routes/staff.Routes");
-const { requestAuditLogger } = require("./middlewares/requestAuditLogger");
-const { checkRequests }      = require("./middlewares/console.middleware");
-const { SystemController }   = require("./controllers/system.controllers");
+const authRoutes          = require("../routes/auth.Routes");
+const adminRoutes         = require("../routes/admin.Routes");
+const branchManagerRoutes = require("../routes/brance-manager.Routes");
+const userRoutes          = require("../routes/user.Routes");
+const auditRoutes         = require("../routes/audit.Routes");
+const staffRoutes         = require("../routes/staff.Routes");
+const { requestAuditLogger } = require("../middlewares/requestAuditLogger");
+const { checkRequests }      = require("../middlewares/console.middleware");
+const { SystemController }   = require("../controllers/system.controllers");
 
 const app = express();
 
