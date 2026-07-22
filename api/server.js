@@ -1,54 +1,79 @@
 "use strict";
 
-// ─── Production Vercel entry point ───────────────────────────────────────────
-// Vercel calls this file as a serverless function.
-// Each request: connect DB (cached) → delegate to Express app.
+// ─── MUST BE FIRST: set env vars before ANY other require() ──────────────────
+// On Vercel, these env vars should also be set in the dashboard.
+// The values below are fallbacks so the app works even without dashboard config.
 
-// Load .env for local testing of this file; on Vercel env vars are injected.
-try { require("dotenv").config({ path: require("path").join(__dirname, "../.env") }); } catch (_) {}
+try {
+  require("dotenv").config({ path: require("path").join(__dirname, "../.env") });
+} catch (_) {}
 
-// ─── Hard-coded fallbacks so Vercel works without dashboard env vars ──────────
-if (!process.env.MONGODB_URI) {
-  process.env.MONGODB_URI = "mongodb+srv://pwa_control:iucnr75i0ZYqv9xs@pwa0.6uuafq9.mongodb.net/nabadiganta";
-}
-if (!process.env.JWT_SECRET) {
-  process.env.JWT_SECRET = "nabadiganta_ngo_jwt_secret_2024_secure_key";
-}
+// Inject fallbacks directly into process.env
+process.env.MONGODB_URI = process.env.MONGODB_URI
+  || "mongodb+srv://pwa_control:iucnr75i0ZYqv9xs@pwa0.6uuafq9.mongodb.net/nabadiganta";
 
-// ─── Load app AFTER env vars are set (JWT_SECRET must be available) ──────────
+process.env.JWT_SECRET = process.env.JWT_SECRET
+  || "nabadiganta_ngo_jwt_secret_2024_secure_key";
+
+process.env.NODE_ENV = process.env.NODE_ENV || "production";
+
+// ─── MongoDB (MUST connect before requiring app so models are ready) ──────────
 const mongoose = require("mongoose");
-const app      = require("../app");
 
-// ─── MongoDB connection cache ─────────────────────────────────────────────────
 let cachedConn = null;
 
 async function connectDB() {
-  if (cachedConn && mongoose.connection.readyState === 1) return;
+  // Already connected on a warm invocation
+  if (mongoose.connection.readyState === 1) return;
 
-  cachedConn = await mongoose.connect(process.env.MONGODB_URI, {
-    serverSelectionTimeoutMS: 10000,
-    socketTimeoutMS:          45000,
+  // Connection in progress — wait
+  if (cachedConn) {
+    cachedConn = await cachedConn;
+    return;
+  }
+
+  cachedConn = mongoose.connect(process.env.MONGODB_URI, {
+    serverSelectionTimeoutMS: 8000,
+    socketTimeoutMS:          30000,
     maxPoolSize:              5,
     minPoolSize:              1,
+    // bufferCommands defaults to true — do NOT set it to false
   });
 
+  await cachedConn;
   console.log("✅ MongoDB:", mongoose.connection.host);
 }
 
-// ─── Vercel handler ───────────────────────────────────────────────────────────
+// ─── Lazy app loader ──────────────────────────────────────────────────────────
+// We delay require('../app') until AFTER connectDB() so that:
+// 1. JWT_SECRET is already in process.env when token.js loads
+// 2. Mongoose models are connected before first query
+let _app = null;
+function getApp() {
+  if (!_app) _app = require("../app");
+  return _app;
+}
+
+// ─── Vercel serverless handler ────────────────────────────────────────────────
 module.exports = async (req, res) => {
+  // CORS — belt + suspenders (app.js also sets these via cors())
   res.setHeader("Access-Control-Allow-Origin",  "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,Accept");
 
   if (req.method === "OPTIONS") return res.status(204).end();
 
+  // Connect to MongoDB first
   try {
     await connectDB();
   } catch (err) {
-    console.error("❌ DB:", err.message);
-    return res.status(503).json({ message: "Database unavailable. Please retry.", code: "DB_ERROR" });
+    console.error("❌ DB connect failed:", err.message);
+    return res.status(503).json({
+      message: "Database unavailable. Please try again in a few seconds.",
+      code: "DB_ERROR",
+    });
   }
 
-  return app(req, res);
+  // Delegate to Express
+  return getApp()(req, res);
 };
