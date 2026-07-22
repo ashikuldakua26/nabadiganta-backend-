@@ -27,8 +27,26 @@ app.use(express.urlencoded({ extended: true }));
 app.use(requestAuditLogger);
 app.use(checkRequests);
 
-// ─── Health ───────────────────────────────────────────────────────────────────
-app.get("/",                  (_, res) => res.json({ ok: true, service: "nabadiganta-backend" }));
+// ─── Health & Root ────────────────────────────────────────────────────────────
+app.get("/", (_, res) => {
+  res.json({
+    service:     "নব্য দিগন্ত এন জিও — NGO Management API",
+    version:     "1.1.0",
+    status:      "online",
+    environment: process.env.NODE_ENV || "development",
+    docs: {
+      health:       "GET  /api/system/health",
+      ready:        "GET  /api/system/ready",
+      login:        "POST /api/auth/login",
+      branches:     "GET  /api/admin/branches",
+      users:        "GET  /api/admin/users",
+      transactions: "GET  /api/admin/transactions",
+      customers:    "GET  /api/branch-manager/customers",
+      staff:        "GET  /api/staff/dashboard",
+      audit:        "GET  /api/audit/statistics",
+    },
+  });
+});
 app.get("/api/system/health", SystemController.healthCheck);
 app.get("/api/system/ready",  SystemController.systemReady);
 
