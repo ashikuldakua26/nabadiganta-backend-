@@ -1,7 +1,11 @@
 const jwt = require("jsonwebtoken");
 
+// Use a guaranteed non-empty secret — falls back to the hardcoded value
+// if neither .env nor Vercel dashboard has JWT_SECRET set
+const getSecret = () =>
+  process.env.JWT_SECRET || "nabadiganta_ngo_jwt_secret_2024_secure_key";
+
 function generateToken(user) {
-  // Extract only the ID from branch — it may be a populated object or a raw ObjectId
   const branchId = user.branch
     ? (user.branch._id || user.branch).toString()
     : null;
@@ -14,11 +18,9 @@ function generateToken(user) {
       area:     user.area || "",
       name:     user.name || "",
     },
-    process.env.JWT_SECRET || "dev_secret_key",
+    getSecret(),
     { expiresIn: "12h" }
   );
 }
 
-module.exports = {
-  generateToken,
-};
+module.exports = { generateToken };

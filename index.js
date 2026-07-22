@@ -1,18 +1,24 @@
+"use strict";
+
+// Local development entry point
+// For production (Vercel), use api/server.js
+
 require("dotenv").config();
+
 const mongoose = require("mongoose");
-const app = require("./api/server");
+const app      = require("./app");
 
 const PORT = process.env.PORT || 5000;
 
 mongoose
-  .connect(process.env.MONGODB_URI || 'mongodb+srv://pwa_control:iucnr75i0ZYqv9xs@pwa0.6uuafq9.mongodb.net/nabadiganta')
+  .connect(process.env.MONGODB_URI)
   .then(() => {
-    console.log("Connected to MongoDB");
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
+    console.log("✅ MongoDB connected");
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 Server running → http://0.0.0.0:${PORT}`);
     });
   })
   .catch((err) => {
-    console.error("Database connection error:", err.message);
+    console.error("❌ MongoDB connection failed:", err.message);
     process.exit(1);
   });
