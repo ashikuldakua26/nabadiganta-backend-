@@ -1,42 +1,66 @@
-/**
- * Vercel Serverless Entry Point
- * ─────────────────────────────
- * Vercel runs this file as a serverless function. Each invocation may
- * be on a cold or warm instance. We keep the mongoose connection alive
- * across warm invocations using module-level caching.
- */
+"use strict";
 
-require("dotenv").config();
+// Load .env for local development
+// On Vercel, env vars are injected via Vercel dashboard → Settings → Environment Variables
+try { require("dotenv").config({ path: require("path").join(__dirname, "../.env") }); } catch (_) {}
+
 const mongoose = require("mongoose");
-const app      = require("../app");
 
-// ─── Lazy / cached MongoDB connection ────────────────────────────────────────
-let isConnected = false;
+// ─── MongoDB URI fallback (used only if Vercel env var is not set) ────────────
+// Set MONGODB_URI in Vercel dashboard to override this default
+const MONGODB_URI =
+  process.env.MONGODB_URI ||
+  "mongodb+srv://pwa_control:iucnr75i0ZYqv9xs@pwa0.6uuafq9.mongodb.net/nabadiganta";
+
+const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  "nabadiganta_ngo_jwt_secret_2024_secure_key";
+
+// Inject into process.env so all modules can read them
+if (!process.env.MONGODB_URI) process.env.MONGODB_URI = MONGODB_URI;
+if (!process.env.JWT_SECRET)  process.env.JWT_SECRET  = JWT_SECRET;
+
+// ─── Cached connection (survives warm Vercel invocations) ─────────────────────
+let cachedConn = null;
 
 async function connectDB() {
-  if (isConnected && mongoose.connection.readyState === 1) return;
+  if (cachedConn && mongoose.connection.readyState === 1) return cachedConn;
 
-  const uri = process.env.MONGODB_URI;
-  if (!uri) throw new Error("MONGODB_URI environment variable is not set");
-
-  await mongoose.connect(uri, {
+  const conn = await mongoose.connect(MONGODB_URI, {
     serverSelectionTimeoutMS: 10000,
     socketTimeoutMS:          45000,
-    maxPoolSize:              5,   // keep pool small for serverless
+    connectTimeoutMS:         15000,
+    maxPoolSize:              5,
     minPoolSize:              1,
-    bufferCommands:           false,
+    // NOTE: do NOT set bufferCommands: false — that causes the buffering timeout error
   });
 
-  isConnected = true;
+  cachedConn = conn;
   console.log("✅ MongoDB connected:", mongoose.connection.host);
+  return conn;
 }
 
-// ─── Vercel handler ───────────────────────────────────────────────────────────
+// ─── Express app (lazy-loaded once per container) ─────────────────────────────
+let expressApp;
+function getApp() {
+  if (!expressApp) expressApp = require("../app");
+  return expressApp;
+}
+
+// ─── Vercel serverless handler ────────────────────────────────────────────────
 module.exports = async (req, res) => {
+  // CORS headers
+  res.setHeader("Access-Control-Allow-Origin",  "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,Accept");
+
+  if (req.method === "OPTIONS") return res.status(204).end();
+
+  // Connect to MongoDB
   try {
     await connectDB();
   } catch (err) {
-    console.error("❌ MongoDB connection failed:", err.message);
+    console.error("❌ DB connection failed:", err.message);
     return res.status(503).json({
       success: false,
       error: {
@@ -46,6 +70,5 @@ module.exports = async (req, res) => {
     });
   }
 
-  // Delegate to the Express app
-  return app(req, res);
+  return getApp()(req, res);
 };

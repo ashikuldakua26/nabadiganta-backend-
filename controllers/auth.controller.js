@@ -6,13 +6,17 @@ const { isValidPin, normalizePhone } = require("../helpers/validators");
 const { seedDemoData } = require("../helpers/demoSeeder");
 
 function getDhakaHour() {
-  const localHourString = new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    hour12: false,
-    timeZone: "Asia/Dhaka",
-  }).format(new Date());
-
-  return Number(localHourString);
+  try {
+    const str = new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      hour12: false,
+      timeZone: "Asia/Dhaka",
+    }).format(new Date());
+    const h = Number(str);
+    if (Number.isFinite(h)) return h;
+  } catch (_) {}
+  // Fallback: UTC+6
+  return (new Date().getUTCHours() + 6) % 24;
 }
 
 async function login(req, res) {
