@@ -15,11 +15,13 @@ const { SystemController }   = require("./controllers/system.controllers");
 const app = express();
 
 // ─── Core middleware ──────────────────────────────────────────────────────────
-app.use(cors());
+app.use(cors({
+  origin: '*'
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(requestAuditLogger);
-app.use(checkRequests);
+// app.use(checkRequests);
 
 // ─── System / health ─────────────────────────────────────────────────────────
 app.get("/api/system/health", SystemController.healthCheck);
