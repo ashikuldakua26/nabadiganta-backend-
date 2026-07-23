@@ -1,6 +1,7 @@
 const Branch = require("../models/Branch");
 const Customer = require("../models/Customer");
 const Message = require("../models/Message");
+const { USER_ROLES } = require("../helpers/constants");
 const { getPagination, isPositiveAmount, normalizePhone } = require("../helpers/validators");
 const { getTodayRange, getMonthRange } = require("../helpers/date");
 const { buildBranchManagerTransaction } = require("../helpers/transactions");
@@ -19,20 +20,23 @@ function getTransactionDate(raw) {
 }
 
 function getBranchId(req) {
-  // Try all possible places the branchId could come from
-  const fromToken = req.user?.branchId || req.user?.branch;
-  const fromBody  = req.body?.branchId  || req.body?.branch;
-  const fromQuery = req.query?.branchId || req.query?.branch;
-
-  const raw = fromToken || fromBody || fromQuery;
-  if (!raw) return null;
-
-  // If it's a populated object { _id: "..." }
-  if (typeof raw === "object" && raw !== null) {
-    return raw._id ? raw._id.toString() : null;
+  // Branch managers always use their token-assigned branch
+  if (req.user?.role === USER_ROLES.BRANCH_MANAGER) {
+    return req.user?.branchId ? req.user.branchId.toString() : null;
   }
 
-  return raw.toString();
+  // Admin/superadmin may override via body or query
+  const override = req.body?.branchId || req.body?.branch ||
+                   req.query?.branchId || req.query?.branch;
+  if (override) {
+    if (typeof override === "object" && override !== null) {
+      return override._id ? override._id.toString() : null;
+    }
+    return override.toString();
+  }
+
+  // Fall back to token's branchId
+  return req.user?.branchId ? req.user.branchId.toString() : null;
 }
 
 function toObjectId(value) {
@@ -55,7 +59,7 @@ async function panelSummary(req, res) {
   try {
     const branchId = toObjectId(getBranchId(req));
     if (!branchId) {
-      return res.status(400).json({ message: "Branch not selected for user" });
+      return res.status(403).json({ message: "Branch not selected for user" });
     }
 
     const today = new Date();
@@ -100,7 +104,7 @@ async function createCustomer(req, res) {
     const branchId = toObjectId(getBranchId(req));
     const { name, phone, area } = req.body;
     if (!branchId) {
-      return res.status(400).json({ success: false, message: "Branch not assigned to this account" });
+      return res.status(403).json({ success: false, message: "Branch not assigned to this account" });
     }
     if (!name || !phone || !area) {
       return res.status(400).json({ success: false, message: "name, phone and area are required" });
@@ -142,7 +146,7 @@ async function listCustomers(req, res) {
   try {
     const branchId = toObjectId(getBranchId(req));
     if (!branchId) {
-      return res.status(400).json({ message: "Branch not assigned to this account. Contact your admin." });
+      return res.status(403).json({ message: "Branch not assigned to this account. Contact your admin." });
     }
 
     const area = req.query.area;
@@ -196,7 +200,7 @@ async function updateCustomer(req, res) {
     const update = {};
 
     if (!branchId) {
-      return res.status(400).json({ message: "Branch not selected for user" });
+      return res.status(403).json({ message: "Branch not selected for user" });
     }
 
     if (name !== undefined) {
@@ -259,7 +263,7 @@ async function deactivateCustomer(req, res) {
     const { customerId } = req.params;
 
     if (!branchId) {
-      return res.status(400).json({ message: "Branch not selected for user" });
+      return res.status(403).json({ message: "Branch not selected for user" });
     }
 
     const customer = await Customer.findOne({ _id: customerId, branch: branchId });
@@ -305,6 +309,39 @@ async function createDeposit(req, res) {
     });
 
     return res.status(201).json({ message: "Deposit collected", deposit });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+}
+
+async function createWithdrawal(req, res) {
+  try {
+    const branchId = toObjectId(getBranchId(req));
+    const { customerId, amount, note } = req.body;
+    if (!branchId || !customerId || !amount) {
+      return res.status(400).json({ message: "branch, customerId, amount are required" });
+    }
+
+    if (!isPositiveAmount(amount)) {
+      return res.status(400).json({ message: "amount must be a positive number" });
+    }
+
+    const customer = await Customer.findOne({ _id: customerId, branch: branchId, isActive: true });
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found in this branch" });
+    }
+
+    const withdrawal = await FinancialTransaction.create({
+      type: "withdrawal",
+      branch: branchId,
+      customer: customerId,
+      amount,
+      note: note || "",
+      createdBy: req.user.id,
+      transactionDate: getTransactionDate(req.body.transactionDate),
+    });
+
+    return res.status(201).json({ message: "Withdrawal recorded", withdrawal });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
@@ -500,6 +537,12 @@ async function getTransactions(req, res) {
     const branchId = toObjectId(getBranchId(req));
     const { limit } = getPagination(req.query, 25, 100);
     const match = buildTransactionFilter({ branchId, queryText: String(req.query.q || "").trim() });
+
+    // Optional type filter
+    if (req.query.type) {
+      match.type = req.query.type;
+    }
+
     const transactions = await FinancialTransaction.find(match)
       .populate("customer", "name")
       .populate("branch", "name")
@@ -553,7 +596,7 @@ async function getDailyReport(req, res) {
   try {
     const branchId = toObjectId(getBranchId(req));
     if (!branchId) {
-      return res.status(400).json({ message: "Branch not selected for user" });
+      return res.status(403).json({ message: "Branch not selected for user" });
     }
 
     const today = getTodayRange();
@@ -587,7 +630,7 @@ async function getMonthlyReport(req, res) {
   try {
     const branchId = toObjectId(getBranchId(req));
     if (!branchId) {
-      return res.status(400).json({ message: "Branch not selected for user" });
+      return res.status(403).json({ message: "Branch not selected for user" });
     }
 
     const month = getMonthRange();
@@ -622,6 +665,7 @@ module.exports = {
   updateCustomer,
   deactivateCustomer,
   createDeposit,
+  createWithdrawal,
   applyLoan,
   recordLoanPayment,
   updateLoanStatus,

@@ -31,7 +31,7 @@ app.use(checkRequests);
 app.get("/", (_, res) => {
   res.json({
     service:     "নব্য দিগন্ত এন জিও — NGO Management API",
-    version:     "1.1.0",
+    version:     "1.2.0",
     status:      "online",
     environment: process.env.NODE_ENV || "development",
     docs: {

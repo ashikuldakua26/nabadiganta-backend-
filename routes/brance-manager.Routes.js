@@ -28,6 +28,7 @@ router.patch("/customers/:customerId",            wrap(ctrl.updateCustomer));
 router.delete("/customers/:customerId",           wrap(ctrl.deactivateCustomer));
 
 router.post("/deposits",                          wrap(ctrl.createDeposit));
+router.post("/withdrawals",                       wrap(ctrl.createWithdrawal));
 
 router.post("/loans/apply",                       wrap(ctrl.applyLoan));
 router.patch("/loans/:loanId/status",             wrap(ctrl.updateLoanStatus));
