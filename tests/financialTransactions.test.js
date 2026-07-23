@@ -2,26 +2,20 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { calculateLoanBalance, getTransactionDateField, buildTransactionFilter, normalizeFinancialTransaction } = require("../helpers/financialTransactions");
 
-test("calculateLoanBalance totals principal and payment records", () => {
-  const balance = calculateLoanBalance({
-    loanAmount: 1000,
-    payments: [{ amount: 200 }, { amount: 300 }],
-  });
+test("calculateLoanBalance returns outstanding balance from principal and paid amount", () => {
+  const balance = calculateLoanBalance(1000, 500);
 
   assert.equal(balance.paidAmount, 500);
   assert.equal(balance.outstandingAmount, 500);
-  assert.equal(balance.balanceStatus, "active");
+  assert.equal(balance.isCompleted, false);
 });
 
 test("calculateLoanBalance marks a loan as completed when fully paid", () => {
-  const balance = calculateLoanBalance({
-    loanAmount: 600,
-    payments: [{ amount: 600 }],
-  });
+  const balance = calculateLoanBalance(600, 600);
 
   assert.equal(balance.paidAmount, 600);
   assert.equal(balance.outstandingAmount, 0);
-  assert.equal(balance.balanceStatus, "completed");
+  assert.equal(balance.isCompleted, true);
 });
 
 test("getTransactionDateField returns the correct date field for each transaction type", () => {

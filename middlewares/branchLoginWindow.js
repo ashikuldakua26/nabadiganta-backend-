@@ -1,46 +1,53 @@
+const Settings = require("../models/settings.Models");
 const { USER_ROLES } = require("../helpers/constants");
+const { getHourInTimezone } = require("../helpers/timezone");
 
-function getDhakaHour() {
-  try {
-    // Try Intl first (works on most Node/V8 builds)
-    const fmt = new Intl.DateTimeFormat("en-US", {
-      hour: "2-digit",
-      hour12: false,
-      timeZone: "Asia/Dhaka",
-    });
-    const str = fmt.format(new Date());
-    const h = Number(str);
-    if (Number.isFinite(h)) return h;
-  } catch (_) {}
-
-  // Fallback: UTC+6 manual offset
-  return (new Date().getUTCHours() + 6) % 24;
-}
-
-function enforceBranchManagerLoginWindow(req, res, next) {
+async function enforceBranchManagerLoginWindow(req, res, next) {
   // Skip for non-branch-managers
   if (!req.user || req.user.role !== USER_ROLES.BRANCH_MANAGER) {
     return next();
   }
 
-  let hour = -1;
   try {
-    hour = getDhakaHour();
+    const settings = await Settings.findOne().lean();
+    const lw = settings?.loginWindow || {};
+
+    // If the window feature is disabled, allow anytime
+    if (lw.branchManagerEnabled === false) {
+      return next();
+    }
+
+    const hour = getHourInTimezone(lw.timezone || "Asia/Dhaka");
+
+    if (!Number.isFinite(hour)) {
+      // If time-check fails for any reason, allow access rather than block
+      return next();
+    }
+
+    const start = lw.startHour ?? 8;
+    const end = lw.endHour ?? 23;
+
+    if (hour < start || hour >= end) {
+      return res.status(403).json({
+        success: false,
+        message: `Branch manager panel is available from ${String(start).padStart(2, "0")}:00 to ${String(end).padStart(2, "0")}:00 (${lw.timezone || "Asia/Dhaka"}).`,
+        code: "LOGIN_WINDOW_CLOSED",
+      });
+    }
+
+    return next();
   } catch (err) {
-    // If time-check fails for any reason, allow access rather than block
+    // If settings fetch fails, fall back to hardcoded window
+    const hour = getHourInTimezone("Asia/Dhaka");
+    if (Number.isFinite(hour) && (hour < 8 || hour >= 23)) {
+      return res.status(403).json({
+        success: false,
+        message: "Branch manager panel is available from 08:00 to 23:00 (Asia/Dhaka).",
+        code: "LOGIN_WINDOW_CLOSED",
+      });
+    }
     return next();
   }
-
-  // Allow 08:00 – 23:00 Dhaka time
-  if (Number.isFinite(hour) && (hour < 8 || hour >= 23)) {
-    return res.status(403).json({
-      success: false,
-      message: "Branch manager panel is available from 08:00 to 23:00 (Dhaka time).",
-      code: "LOGIN_WINDOW_CLOSED",
-    });
-  }
-
-  return next();
 }
 
 module.exports = { enforceBranchManagerLoginWindow };

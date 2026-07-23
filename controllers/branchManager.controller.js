@@ -4,10 +4,8 @@ const Message = require("../models/Message");
 const { USER_ROLES } = require("../helpers/constants");
 const { getPagination, isPositiveAmount, normalizePhone } = require("../helpers/validators");
 const { getTodayRange, getMonthRange } = require("../helpers/date");
-const { buildBranchManagerTransaction } = require("../helpers/transactions");
-const { applyLoanPayment } = require("../helpers/loanBalance");
+const { applyLoanPayment, calculateLoanRepayment, buildTransactionFilter, getTransactionDateField, normalizeFinancialTransaction } = require("../helpers/financialTransactions");
 const FinancialTransaction = require("../models/FinancialTransaction");
-const { buildTransactionFilter, getTransactionDateField, normalizeFinancialTransaction } = require("../helpers/financialTransactions");
 const mongoose = require("mongoose");
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -350,7 +348,7 @@ async function createWithdrawal(req, res) {
 async function applyLoan(req, res) {
   try {
     const branchId = toObjectId(getBranchId(req));
-    const { customerId, amount, note } = req.body;
+    const { customerId, amount, note, interestRate } = req.body;
     if (!branchId || !customerId || !amount) {
       return res.status(400).json({ message: "branch, customerId, amount are required" });
     }
@@ -371,6 +369,7 @@ async function applyLoan(req, res) {
       amount,
       note: note || "",
       status: "applied",
+      interestRate: Number(interestRate || 0),
       createdBy: req.user.id,
       transactionDate: getTransactionDate(req.body.appliedAt),
       appliedAt: getTransactionDate(req.body.appliedAt),
@@ -396,8 +395,6 @@ async function updateLoanStatus(req, res) {
       {
         status,
         approvedBy: req.user.id,
-        transactionDate: new Date(),
-        appliedAt: new Date(),
       },
       { new: true }
     );
@@ -435,12 +432,25 @@ async function listLoans(req, res) {
       FinancialTransaction.countDocuments({ ...query, type: "loan" }),
     ]);
 
-    const loansWithBalance = loans.map((loan) => ({
-      ...loan,
-      outstandingAmount: Number(loan.outstandingAmount ?? loan.amount ?? 0),
-      paidAmount: Number(loan.paidAmount ?? 0),
-      balanceStatus: loan.balanceStatus || (Number(loan.outstandingAmount ?? loan.amount ?? 0) === 0 ? "completed" : "active"),
-    }));
+    // Calculate actual outstanding from payment records
+    const loanIds = loans.map((l) => l._id);
+    const paymentAggs = await FinancialTransaction.aggregate([
+      { $match: { type: "loan_payment", loan: { $in: loanIds } } },
+      { $group: { _id: "$loan", totalPaid: { $sum: "$amount" } } },
+    ]);
+    const paidMap = {};
+    paymentAggs.forEach((p) => { paidMap[p._id.toString()] = p.totalPaid; });
+
+    const loansWithBalance = loans.map((loan) => {
+      const totalPaid = paidMap[loan._id.toString()] || 0;
+      const outstanding = Math.max(0, Number(loan.amount || 0) - totalPaid);
+      return {
+        ...loan,
+        paidAmount: totalPaid,
+        outstandingAmount: outstanding,
+        balanceStatus: outstanding === 0 && Number(loan.amount || 0) > 0 ? "completed" : "active",
+      };
+    });
 
     return res.json({ loans: loansWithBalance, pagination: { page, limit, total } });
   } catch (error) {
@@ -472,7 +482,7 @@ async function recordLoanPayment(req, res) {
       return res.status(404).json({ message: "Loan not found for this customer in this branch" });
     }
 
-    const paymentPlan = applyLoanPayment(loan, amount);
+    const paymentPlan = calculateLoanRepayment(loan, amount);
     if (paymentPlan.appliedAmount <= 0) {
       return res.status(400).json({ message: "Loan already has no outstanding balance" });
     }
@@ -487,16 +497,29 @@ async function recordLoanPayment(req, res) {
       createdBy: req.user.id,
       transactionDate: getTransactionDate(req.body.paidAt),
       paidAt: getTransactionDate(req.body.paidAt),
+      profitPortion: paymentPlan.profitPortion,
+      principalPortion: paymentPlan.principalPortion,
     });
 
-    const updatedLoan = await FinancialTransaction.findById(loan._id).lean();
+    // Recalculate loan balance from all payments
+    const allPayments = await FinancialTransaction.find({ type: "loan_payment", loan: loan._id });
+    const totalPaid = allPayments.reduce((s, p) => s + Number(p.amount || 0), 0);
+    const profitPaid = allPayments.reduce((s, p) => s + Number(p.profitPortion || 0), 0);
+    const principalPaid = allPayments.reduce((s, p) => s + Number(p.principalPortion || 0), 0);
+    const totalPayable = Math.max(Number(loan.totalPayable || loan.amount || 0), 0);
+    const remainingAmount = Math.max(0, totalPayable - totalPaid);
 
     return res.status(201).json({
-      message: paymentPlan.remainingAmount > 0 ? "Loan payment recorded and excess amount was capped to the remaining balance" : "Loan payment recorded",
+      message: remainingAmount > 0 ? "Loan payment recorded" : "Loan fully paid!",
       payment,
-      loan: updatedLoan,
       appliedAmount: paymentPlan.appliedAmount,
-      remainingAmount: paymentPlan.remainingAmount,
+      profitPortion: paymentPlan.profitPortion,
+      principalPortion: paymentPlan.principalPortion,
+      remainingAmount,
+      paidAmount: totalPaid,
+      outstandingAmount: remainingAmount,
+      profitPaid,
+      principalPaid,
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });
@@ -511,18 +534,34 @@ async function getFunds(req, res) {
         { $match: { type: "deposit", branch: branchId } },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]),
+      // Calculate actual outstanding from loans minus their payments
       FinancialTransaction.aggregate([
         { $match: { type: "loan", branch: branchId, status: "passed" } },
-        { $group: { _id: null, totalOutstanding: { $sum: "$outstandingAmount" } } },
+        { $project: { _id: 1, amount: 1 } },
       ]),
     ]);
 
     const totalDeposit = depositAgg[0]?.total || 0;
-    const totalOutstandingLoans = outstandingLoanAgg[0]?.totalOutstanding || 0;
+    const passedLoans = outstandingLoanAgg || [];
+    const loanIds = passedLoans.map((l) => l._id);
+
+    // Get total payments made against these loans
+    const paymentAggs = loanIds.length > 0
+      ? await FinancialTransaction.aggregate([
+          { $match: { type: "loan_payment", loan: { $in: loanIds } } },
+          { $group: { _id: null, totalPaid: { $sum: "$amount" } } },
+        ])
+      : [];
+
+    const totalLoaned = passedLoans.reduce((s, l) => s + Number(l.amount || 0), 0);
+    const totalPaid = paymentAggs[0]?.totalPaid || 0;
+    const totalOutstandingLoans = Math.max(0, totalLoaned - totalPaid);
 
     return res.json({
       funds: {
         totalDeposit,
+        totalLoaned,
+        totalPaid,
         totalOutstandingLoans,
         netAvailable: Math.max(0, totalDeposit - totalOutstandingLoans),
       },
@@ -535,7 +574,7 @@ async function getFunds(req, res) {
 async function getTransactions(req, res) {
   try {
     const branchId = toObjectId(getBranchId(req));
-    const { limit } = getPagination(req.query, 25, 100);
+    const { page, limit, skip } = getPagination(req.query, 25, 100);
     const match = buildTransactionFilter({ branchId, queryText: String(req.query.q || "").trim() });
 
     // Optional type filter
@@ -543,17 +582,22 @@ async function getTransactions(req, res) {
       match.type = req.query.type;
     }
 
-    const transactions = await FinancialTransaction.find(match)
-      .populate("customer", "name")
-      .populate("branch", "name")
-      .populate("createdBy", "name phone role")
-      .populate("approvedBy", "name phone role")
-      .sort({ transactionDate: -1, createdAt: -1 })
-      .limit(limit)
-      .lean();
+    const [transactions, total] = await Promise.all([
+      FinancialTransaction.find(match)
+        .populate("customer", "name")
+        .populate("branch", "name")
+        .populate("createdBy", "name phone role")
+        .populate("approvedBy", "name phone role")
+        .sort({ transactionDate: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      FinancialTransaction.countDocuments(match),
+    ]);
 
     return res.json({
       transactions: transactions.map(normalizeFinancialTransaction).sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)),
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });

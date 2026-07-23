@@ -1,25 +1,11 @@
 "use strict";
 
-// ─── Env injection — load .env first (Vercel injects these automatically) ────
-try { require("dotenv").config(); } catch (_) {}
-
-if (!process.env.MONGODB_URI) {
-  process.env.MONGODB_URI = "mongodb+srv://pwa_control:iucnr75i0ZYqv9xs@pwa0.6uuafq9.mongodb.net/nabadiganta";
-}
-if (!process.env.JWT_SECRET) {
-  process.env.JWT_SECRET = "nabadiganta_ngo_jwt_secret_2024_secure_key";
-}
-if (!process.env.NODE_ENV) {
-  process.env.NODE_ENV = "production";
-}
-
 const express = require("express");
 const cors    = require("cors");
-const mongoose = require("mongoose");
 
 const authRoutes          = require("./routes/auth.Routes");
 const adminRoutes         = require("./routes/admin.Routes");
-const branchManagerRoutes = require("./routes/brance-manager.Routes");
+const branchManagerRoutes = require("./routes/branch-manager.Routes");
 const userRoutes          = require("./routes/user.Routes");
 const auditRoutes         = require("./routes/audit.Routes");
 const staffRoutes         = require("./routes/staff.Routes");
@@ -114,36 +100,4 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ─── Vercel serverless handler — connect DB on each request ───────────────────
-let _connectPromise = null;
-function connectDB() {
-  if (mongoose.connection.readyState === 1) return Promise.resolve();
-  if (_connectPromise) return _connectPromise;
-  _connectPromise = mongoose.connect(process.env.MONGODB_URI, {
-    serverSelectionTimeoutMS: 10000,
-    socketTimeoutMS: 45000,
-    maxPoolSize: 5,
-    minPoolSize: 1,
-  }).then((conn) => { _connectPromise = null; return conn; })
-    .catch((err) => { _connectPromise = null; throw err; });
-  return _connectPromise;
-}
-
-// Export for Vercel serverless
-module.exports = async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,Accept,X-Requested-With");
-  if (req.method === "OPTIONS") { res.status(204).end(); return; }
-  try { await connectDB(); }
-  catch (err) { console.error("DB error:", err.message); res.status(503).json({ message: "Database unavailable", code: "DB_CONNECTION_ERROR" }); return; }
-  app(req, res);
-};
-
-// For local dev: also listen on a port when run directly
-if (require.main === module) {
-  const PORT = process.env.PORT || 5000;
-  connectDB().then(() => {
-    app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server running → http://0.0.0.0:${PORT}`));
-  }).catch((err) => { console.error("❌ MongoDB failed:", err.message); process.exit(1); });
-}
+module.exports = app;

@@ -1,8 +1,6 @@
 "use strict";
 
 // Local development entry point
-// For production (Vercel), use api/server.js
-
 require("dotenv").config();
 
 const mongoose = require("mongoose");

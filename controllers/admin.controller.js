@@ -8,9 +8,8 @@ const AuditLog = require("../models/AuditLog");
 const { USER_ROLES } = require("../helpers/constants");
 const { getTodayRange, getMonthRange } = require("../helpers/date");
 const { getPagination, isValidPin, normalizePhone } = require("../helpers/validators");
-const { applyLoanPayment } = require("../helpers/loanBalance");
+const { applyLoanPayment, calculateLoanRepayment, buildTransactionFilter, getTransactionDateField, normalizeFinancialTransaction } = require("../helpers/financialTransactions");
 const FinancialTransaction = require("../models/FinancialTransaction");
-const { buildTransactionFilter, getTransactionDateField, normalizeFinancialTransaction } = require("../helpers/financialTransactions");
 const { getResourceAuditLogs } = require("../helpers/audit");
 const { getCache, setCache } = require("../helpers/cache");
 const { buildUserListQuery } = require("../helpers/userManagement");
@@ -46,7 +45,7 @@ async function createTransaction(req, res , next) {
   try {
     if (!requireAdminOrBranchManager(req, res)) return;
 
-    const { type, amount, branchId, customerId, at, note, status } = req.body;
+    const { type, amount, branchId, customerId, at, note, status, interestRate } = req.body;
     if (!type || !amount || !branchId || !customerId) {
       return res.status(400).json({ message: "type, amount, branchId and customerId are required" });
     }
@@ -100,13 +99,14 @@ async function createTransaction(req, res , next) {
         amount: parsedAmount,
         note: note || "",
         status: nextStatus,
+        interestRate: Number(interestRate || 0),
         createdBy: req.user.id,
         approvedBy: ["passed", "absent", "rejected"].includes(nextStatus) ? req.user.id : null,
         transactionDate,
         appliedAt: transactionDate,
       });
 
-      return res.status(201).json({ message: "Loan created", transaction: { id: loan._id, _id: loan._id, type: "loan", amount: loan.amount, branch: loan.branch, customer: loan.customer, at: loan.appliedAt, status: loan.status, note: loan.note } });
+      return res.status(201).json({ message: "Loan created", transaction: { id: loan._id, _id: loan._id, type: "loan", amount: loan.amount, branch: loan.branch, customer: loan.customer, interestRate: loan.interestRate, profitAmount: loan.profitAmount, totalPayable: loan.totalPayable, at: loan.appliedAt, status: loan.status, note: loan.note } });
     }
 
     if (type === "loan_payment") {
@@ -128,7 +128,7 @@ async function createTransaction(req, res , next) {
         return res.status(400).json({ message: "Selected loan does not belong to the selected branch" });
       }
 
-      const paymentPlan = applyLoanPayment(loan, parsedAmount);
+      const paymentPlan = calculateLoanRepayment(loan, parsedAmount);
       if (paymentPlan.appliedAmount <= 0) {
         return res.status(400).json({ message: "Loan already has no outstanding balance" });
       }
@@ -143,10 +143,12 @@ async function createTransaction(req, res , next) {
         createdBy: req.user.id,
         transactionDate,
         paidAt: transactionDate,
+        profitPortion: paymentPlan.profitPortion,
+        principalPortion: paymentPlan.principalPortion,
       });
 
       return res.status(201).json({
-        message: paymentPlan.remainingAmount > 0 ? "Loan payment recorded and excess amount was capped to the remaining balance" : "Loan payment recorded",
+        message: paymentPlan.remaining > 0 ? "Loan payment recorded" : "Loan fully paid!",
         transaction: {
           id: payment._id,
           _id: payment._id,
@@ -157,7 +159,9 @@ async function createTransaction(req, res , next) {
           loan: payment.loan,
           at: payment.paidAt,
           note: payment.note,
-          remainingAmount: paymentPlan.remainingAmount,
+          profitPortion: paymentPlan.profitPortion,
+          principalPortion: paymentPlan.principalPortion,
+          remainingAmount: paymentPlan.remaining,
         },
       });
     }
@@ -355,6 +359,8 @@ async function getMeta(req, res, next) {
       officeHours: settings.officeHours,
       socialLinks: settings.socialLinks,
       permissions: settings.permissions,
+      kyc: settings.kyc,
+      loginWindow: settings.loginWindow,
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });
@@ -387,6 +393,8 @@ async function updateSettings(req, res, next) {
       "officeHours",
       "socialLinks",
       "permissions",
+      "kyc",
+      "loginWindow",
     ];
 
     const patch = allowed.reduce((acc, key) => {
@@ -789,21 +797,35 @@ async function createUserLoanPayment(req, res, next) {
       return res.status(400).json({ message: "amount must be a positive number" });
     }
 
+    const paymentPlan = calculateLoanRepayment(loan, parsedAmount);
+    if (paymentPlan.appliedAmount <= 0) {
+      return res.status(400).json({ message: "Loan already has no outstanding balance" });
+    }
+
     const payment = await FinancialTransaction.create({
       type: "loan_payment",
       loan: loan._id,
       customer: customer._id,
       branch: customer.branch,
-      amount: parsedAmount,
+      amount: paymentPlan.appliedAmount,
       note: String(note || "").trim(),
       createdBy: req.user.id,
       transactionDate: getTransactionDate(req.body.paidAt),
       paidAt: getTransactionDate(req.body.paidAt),
+      profitPortion: paymentPlan.profitPortion,
+      principalPortion: paymentPlan.principalPortion,
     });
 
     const updatedLoan = await FinancialTransaction.findById(loan._id).lean();
 
-    return res.status(201).json({ message: "Loan payment recorded", payment, loan: updatedLoan });
+    return res.status(201).json({
+      message: paymentPlan.remaining > 0 ? "Loan payment recorded" : "Loan fully paid!",
+      payment,
+      loan: updatedLoan,
+      profitPortion: paymentPlan.profitPortion,
+      principalPortion: paymentPlan.principalPortion,
+      remainingAmount: paymentPlan.remaining,
+    });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
@@ -1558,7 +1580,27 @@ async function listLoans(req, res, next) {
       FinancialTransaction.countDocuments({ ...query, type: "loan" }),
     ]);
 
-    return res.json({ loans, pagination: { page, limit, total } });
+    // Calculate actual outstanding from payment records
+    const loanIds = loans.map((l) => l._id);
+    const paymentAggs = await FinancialTransaction.aggregate([
+      { $match: { type: "loan_payment", loan: { $in: loanIds } } },
+      { $group: { _id: "$loan", totalPaid: { $sum: "$amount" } } },
+    ]);
+    const paidMap = {};
+    paymentAggs.forEach((p) => { paidMap[p._id.toString()] = p.totalPaid; });
+
+    const enrichedLoans = loans.map((loan) => {
+      const totalPaid = paidMap[loan._id.toString()] || 0;
+      const outstanding = Math.max(0, Number(loan.amount || 0) - totalPaid);
+      return {
+        ...loan,
+        paidAmount: totalPaid,
+        outstandingAmount: outstanding,
+        balanceStatus: outstanding === 0 && Number(loan.amount || 0) > 0 ? "completed" : "active",
+      };
+    });
+
+    return res.json({ loans: enrichedLoans, pagination: { page, limit, total } });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
@@ -1584,8 +1626,6 @@ async function updateLoanStatus(req, res, next) {
       {
         status,
         approvedBy: req.user.id,
-        transactionDate: new Date(),
-        appliedAt: new Date(),
       },
       { new: true }
     );

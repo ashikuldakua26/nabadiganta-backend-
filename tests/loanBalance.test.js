@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { calculateLoanBalance, applyLoanPayment } = require("../helpers/loanBalance");
+const { calculateLoanBalance, applyLoanPayment } = require("../helpers/financialTransactions");
 
 test("calculateLoanBalance returns outstanding balance from principal and paid amount", () => {
   const balance = calculateLoanBalance(1000, 250);

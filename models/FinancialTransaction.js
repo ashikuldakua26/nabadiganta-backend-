@@ -13,8 +13,11 @@ async function syncLoanBalance(loanId) {
   if (!loanDoc) return;
 
   const totalPaid = paymentDocs.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-  const outstandingAmount = Math.max(0, Number(loanDoc.amount || 0) - totalPaid);
-  const balanceStatus = outstandingAmount === 0 && Number(loanDoc.amount || 0) > 0 ? "completed" : "active";
+  const profitPaid = paymentDocs.reduce((sum, payment) => sum + Number(payment.profitPortion || 0), 0);
+  const principalPaid = paymentDocs.reduce((sum, payment) => sum + Number(payment.principalPortion || 0), 0);
+  const totalPayable = Math.max(Number(loanDoc.totalPayable || loanDoc.amount || 0), 0);
+  const outstandingAmount = Math.max(0, totalPayable - totalPaid);
+  const balanceStatus = outstandingAmount === 0 && totalPayable > 0 ? "completed" : "active";
 
   await FinancialTransaction.updateOne(
     { _id: loanId, type: "loan" },
@@ -22,6 +25,8 @@ async function syncLoanBalance(loanId) {
       paidAmount: totalPaid,
       outstandingAmount,
       balanceStatus,
+      profitPaid,
+      principalPaid,
     }
   );
 }
@@ -52,6 +57,8 @@ const financialTransactionSchema = new mongoose.Schema(
     appliedAt: { type: Date, default: null, index: true },
     paidAt: { type: Date, default: null, index: true },
     withdrawnAt: { type: Date, default: null, index: true },
+
+    // ─── Loan Balance ─────────────────────────────────────────────────────────
     paidAmount: { type: Number, default: 0, min: 0 },
     outstandingAmount: { type: Number, default: 0, min: 0 },
     balanceStatus: {
@@ -60,19 +67,20 @@ const financialTransactionSchema = new mongoose.Schema(
       default: "active",
       index: true,
     },
-    loanPaidAmount: { type: Number, default: 0, min: 0 },
-    loanOutstandingAmount: { type: Number, default: 0, min: 0 },
-    loanBalanceStatus: {
-      type: String,
-      enum: ["active", "completed"],
-      default: "active",
-      index: true,
-    },
+
+    // ─── Interest / Profit Tracking (only for type="loan") ────────────────────
+    interestRate:  { type: Number, default: 0, min: 0 },     // e.g. 10 = 10%
+    profitAmount:  { type: Number, default: 0, min: 0 },     // interestRate% of principal
+    totalPayable:  { type: Number, default: 0, min: 0 },     // amount + profitAmount
+    profitPaid:    { type: Number, default: 0, min: 0 },     // how much profit collected
+    principalPaid: { type: Number, default: 0, min: 0 },     // how much principal collected
+    profitPortion: { type: Number, default: 0, min: 0 },     // for loan_payment: profit portion
+    principalPortion: { type: Number, default: 0, min: 0 },  // for loan_payment: principal portion
   },
   { timestamps: true }
 );
 
-financialTransactionSchema.pre("save", function (next) {
+financialTransactionSchema.pre("save", async function () {
   const transactionDate = this.transactionDate || new Date();
   const effectiveDate = this.transactionDate || this.collectedAt || this.appliedAt || this.paidAt || this.withdrawnAt || transactionDate;
 
@@ -83,32 +91,19 @@ financialTransactionSchema.pre("save", function (next) {
   this.withdrawnAt = this.type === "withdrawal" ? effectiveDate : this.withdrawnAt || null;
 
   if (this.type === "loan") {
+    this.interestRate = Number(this.interestRate || 0);
+    this.profitAmount = Math.round(Number(this.amount || 0) * this.interestRate / 100);
+    this.totalPayable = Number(this.amount || 0) + this.profitAmount;
     this.paidAmount = 0;
-    this.outstandingAmount = Number(this.amount || 0);
+    this.outstandingAmount = this.totalPayable;
     this.balanceStatus = "active";
+    this.profitPaid = 0;
+    this.principalPaid = 0;
   }
 
   if (this.type === "loan_payment") {
-    const paymentBalance = calculateLoanBalance({
-      loanAmount: Number(this.amount || 0),
-      payments: [{ amount: this.amount }],
-    });
-    this.paidAmount = paymentBalance.paidAmount;
-    this.outstandingAmount = paymentBalance.outstandingAmount;
-    this.balanceStatus = paymentBalance.balanceStatus;
+    // syncLoanBalance (post-save) recalculates the parent loan
   }
-
-  if (this.type === "loan" || this.type === "loan_payment") {
-    const balance = calculateLoanBalance({
-      loanAmount: this.type === "loan" ? this.amount : Number(this.amount || 0),
-      payments: this.type === "loan_payment" ? [{ amount: this.amount }] : [],
-    });
-    this.loanPaidAmount = this.type === "loan_payment" ? balance.paidAmount : 0;
-    this.loanOutstandingAmount = this.type === "loan_payment" ? balance.outstandingAmount : this.amount;
-    this.loanBalanceStatus = this.type === "loan_payment" ? balance.balanceStatus : "active";
-  }
-
-  next();
 });
 
 financialTransactionSchema.post("save", async function () {

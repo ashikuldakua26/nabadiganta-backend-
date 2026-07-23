@@ -1,23 +1,11 @@
 const Branch = require("../models/Branch");
 const User = require("../models/User");
+const Settings = require("../models/settings.Models");
 const { USER_ROLES } = require("../helpers/constants");
 const { generateToken } = require("../helpers/token");
 const { isValidPin, normalizePhone } = require("../helpers/validators");
+const { getHourInTimezone } = require("../helpers/timezone");
 const { seedDemoData } = require("../helpers/demoSeeder");
-
-function getDhakaHour() {
-  try {
-    const str = new Intl.DateTimeFormat("en-US", {
-      hour: "2-digit",
-      hour12: false,
-      timeZone: "Asia/Dhaka",
-    }).format(new Date());
-    const h = Number(str);
-    if (Number.isFinite(h)) return h;
-  } catch (_) {}
-  // Fallback: UTC+6
-  return (new Date().getUTCHours() + 6) % 24;
-}
 
 async function login(req, res) {
   try {
@@ -42,12 +30,32 @@ async function login(req, res) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
+    // ─── Check role-based login permissions from Settings ───────────────────
+    const settings = await Settings.findOne().lean();
+    const perm = settings?.permissions || {};
+
+    if (user.role === USER_ROLES.USER && perm.allowUserLogin === false) {
+      return res.status(403).json({ message: "User login is currently disabled." });
+    }
+    if (user.role === USER_ROLES.BRANCH_MANAGER && perm.allowBranchAdminLogin === false) {
+      return res.status(403).json({ message: "Branch manager login is currently disabled." });
+    }
+    if (user.role === USER_ROLES.ADMIN && perm.allowAdminLogin === false) {
+      return res.status(403).json({ message: "Admin login is currently disabled." });
+    }
+
+    // ─── Branch manager login window check ─────────────────────────────────
     if (user.role === USER_ROLES.BRANCH_MANAGER) {
-      const hour = getDhakaHour();
-      if (hour < 8 || hour >= 23) {
-        return res.status(403).json({
-          message: "Branch manager login time is 08:00 AM to 11:00 PM (Asia/Dhaka).",
-        });
+      const lw = settings?.loginWindow || {};
+      if (lw.branchManagerEnabled !== false) {
+        const hour = getHourInTimezone(lw.timezone || "Asia/Dhaka");
+        const start = lw.startHour ?? 8;
+        const end = lw.endHour ?? 23;
+        if (hour < start || hour >= end) {
+          return res.status(403).json({
+            message: `Branch manager login is restricted to ${String(start).padStart(2, "0")}:00–${String(end).padStart(2, "0")}:00 (${lw.timezone || "Asia/Dhaka"}).`,
+          });
+        }
       }
     }
 

@@ -17,7 +17,7 @@ router.use(authorize(
   USER_ROLES.ADMIN,
   USER_ROLES.SUPER_ADMIN
 ));
-router.use(enforceBranchManagerLoginWindow);
+router.use(wrap(enforceBranchManagerLoginWindow));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 router.get("/panel",                              wrap(ctrl.panelSummary));

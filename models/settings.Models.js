@@ -45,9 +45,14 @@ const settingsSchema = new mongoose.Schema(
         // admin
         allowAdminCreation: { type: Boolean, default: true },
         allowAdminLogin: { type: Boolean, default: true },
-        assignRoles: { type: Boolean, default: true },
+        assignRoles: { type: Boolean, default: true }, 
+    },
 
-        
+    loginWindow: {
+        branchManagerEnabled: { type: Boolean, default: true },
+        startHour: { type: Number, default: 8, min: 0, max: 23 },
+        endHour: { type: Number, default: 23, min: 0, max: 23 },
+        timezone: { type: String, default: "Asia/Dhaka" },
     },
     
 

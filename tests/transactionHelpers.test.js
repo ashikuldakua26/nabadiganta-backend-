@@ -1,9 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildBranchManagerTransaction } = require("../helpers/transactions");
+const { normalizeFinancialTransaction } = require("../helpers/financialTransactions");
 
-test("buildBranchManagerTransaction maps deposits into branch-friendly payloads", () => {
-  const payload = buildBranchManagerTransaction({
+test("normalizeFinancialTransaction maps deposits into branch-friendly payloads", () => {
+  const payload = normalizeFinancialTransaction({
     _id: "dep-1",
     amount: 5000,
     note: "Saved weekly",
@@ -20,8 +20,8 @@ test("buildBranchManagerTransaction maps deposits into branch-friendly payloads"
   assert.equal(payload.note, "Saved weekly");
 });
 
-test("buildBranchManagerTransaction keeps loan payment context", () => {
-  const payload = buildBranchManagerTransaction({
+test("normalizeFinancialTransaction keeps loan payment context", () => {
+  const payload = normalizeFinancialTransaction({
     _id: "payment-1",
     amount: 2500,
     customer: { name: "Karim" },
