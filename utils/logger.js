@@ -31,8 +31,12 @@ class Logger {
   }
 
   ensureLogDirectory() {
-    if (!fs.existsSync(this.logsDir)) {
-      fs.mkdirSync(this.logsDir, { recursive: true });
+    try {
+      if (!fs.existsSync(this.logsDir)) {
+        fs.mkdirSync(this.logsDir, { recursive: true });
+      }
+    } catch (_) {
+      // Vercel read-only filesystem — skip file logging
     }
   }
 
@@ -46,12 +50,15 @@ class Logger {
   }
 
   writeToFile(level, message) {
-    const filename = path.join(
-      this.logsDir,
-      `${new Date().toISOString().split('T')[0]}.log`
-    );
-
-    fs.appendFileSync(filename, message + '\n', 'utf8');
+    try {
+      const filename = path.join(
+        this.logsDir,
+        `${new Date().toISOString().split('T')[0]}.log`
+      );
+      fs.appendFileSync(filename, message + '\n', 'utf8');
+    } catch (_) {
+      // Vercel read-only filesystem — skip file logging
+    }
   }
 
   log(level, message, metadata = {}) {
