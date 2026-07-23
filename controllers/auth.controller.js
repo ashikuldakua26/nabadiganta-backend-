@@ -53,15 +53,19 @@ async function login(req, res) {
 
     const token = generateToken(user);
     return res.json({
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        phone: user.phone,
-        role: user.role,
-        area: user.area,
-        branch: user.branch,
+      success: true,
+      data: {
+        token,
+        user: {
+          id: user._id,
+          name: user.name,
+          phone: user.phone,
+          role: user.role,
+          area: user.area,
+          branch: user.branch,
+        },
       },
+      message: "Login successful",
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });
@@ -75,7 +79,7 @@ async function profile(req, res) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    return res.json({ user });
+    return res.json({ success: true, data: { user } });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
@@ -218,11 +222,16 @@ async function importDemoData(req, res) {
   }
 }
 
+async function logout(req, res) {
+  return res.json({ message: "Logged out successfully" });
+}
+
 module.exports = {
   login,
   profile,
   register,
   changePin,
+  logout,
   seedDefaults,
   importDemoData,
 };

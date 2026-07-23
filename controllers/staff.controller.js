@@ -28,7 +28,7 @@ const fail = (res, message, code = "SERVER_ERROR", statusCode = 500) =>
 
 exports.getStaffDashboard = async (req, res) => {
   try {
-    const branchId = req.user.branch;
+    const branchId = req.user.branchId;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -63,7 +63,7 @@ exports.listCustomers = async (req, res) => {
   try {
     const { page, limit, skip } = paginate(req.query);
     const { search } = req.query;
-    const branchId = req.user.branch;
+    const branchId = req.user.branchId;
 
     const filter = { ...(branchId && { branch: branchId }), isActive: true };
     if (search) {
@@ -101,7 +101,7 @@ exports.viewDeposits = async (req, res) => {
   try {
     const { page, limit, skip } = paginate(req.query);
     const { status, startDate, endDate } = req.query;
-    const branchId = req.user.branch;
+    const branchId = req.user.branchId;
 
     const filter = { ...(branchId && { branch: branchId }), type: "deposit" };
     if (status) filter.status = status;
@@ -141,7 +141,7 @@ exports.viewLoans = async (req, res) => {
   try {
     const { page, limit, skip } = paginate(req.query);
     const { status, startDate, endDate } = req.query;
-    const branchId = req.user.branch;
+    const branchId = req.user.branchId;
 
     const filter = { ...(branchId && { branch: branchId }), type: "loan" };
     if (status) filter.status = status;
@@ -188,7 +188,7 @@ exports.viewTransactions = async (req, res) => {
   try {
     const { page, limit, skip } = paginate(req.query);
     const { type, status, startDate, endDate } = req.query;
-    const branchId = req.user.branch;
+    const branchId = req.user.branchId;
 
     const filter = { ...(branchId && { branch: branchId }) };
     if (type)   filter.type   = type;
@@ -232,7 +232,7 @@ exports.getTransactionDetails = async (req, res) => {
 exports.viewMessages = async (req, res) => {
   try {
     const { page, limit, skip } = paginate(req.query);
-    const branchId = req.user.branch;
+    const branchId = req.user.branchId;
 
     const filter = { ...(branchId && { branch: branchId }) };
 
@@ -277,7 +277,7 @@ exports.sendMessage = async (req, res) => {
     const message = await Message.create({
       customer: customerId,
       branch:   customer.branch,
-      sentBy:   req.user.userId,
+      sentBy:   req.user.id,
       type,
       body,
     });
@@ -301,12 +301,12 @@ exports.markMessageRead = async (req, res) => {
 
 exports.getTeamMembers = async (req, res) => {
   try {
-    const branchId = req.user.branch;
+    const branchId = req.user.branchId;
 
     const filter = {
       isActive: true,
       role: { $in: ["staff", "branch_manager"] },
-      _id: { $ne: req.user.userId },
+      _id: { $ne: req.user.id },
       ...(branchId && { branch: branchId }),
     };
 
@@ -324,7 +324,7 @@ exports.getTeamMembers = async (req, res) => {
 
 exports.getDailyReport = async (req, res) => {
   try {
-    const branchId = req.user.branch;
+    const branchId = req.user.branchId;
     const dateStr  = req.query.date || new Date().toISOString().split("T")[0];
     const dayStart = new Date(dateStr);
     const dayEnd   = new Date(dateStr);
@@ -361,7 +361,7 @@ exports.getDailyReport = async (req, res) => {
 
 exports.getMonthlyReport = async (req, res) => {
   try {
-    const branchId = req.user.branch;
+    const branchId = req.user.branchId;
     const year  = parseInt(req.query.year)  || new Date().getFullYear();
     const month = parseInt(req.query.month) || new Date().getMonth() + 1;
 
@@ -401,7 +401,7 @@ exports.getMonthlyReport = async (req, res) => {
 
 exports.getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId)
+    const user = await User.findById(req.user.id)
       .select("-pin -__v")
       .populate("branch", "name area");
     if (!user) return fail(res, "User not found", "NOT_FOUND", 404);
@@ -417,7 +417,7 @@ exports.updateProfile = async (req, res) => {
     const update  = {};
     allowed.forEach((k) => { if (req.body[k] !== undefined) update[k] = req.body[k]; });
 
-    const user = await User.findByIdAndUpdate(req.user.userId, update, { new: true, runValidators: true })
+    const user = await User.findByIdAndUpdate(req.user.id, update, { new: true, runValidators: true })
       .select("-pin -__v")
       .populate("branch", "name area");
 

@@ -1,10 +1,14 @@
 const Customer = require("../models/Customer");
 const FinancialTransaction = require("../models/FinancialTransaction");
 const Message = require("../models/Message");
+const mongoose = require("mongoose");
 const { getPagination } = require("../helpers/validators");
 
 function getBranchId(req) {
-  return req.user.branchId || req.query.branchId;
+  const raw = req.user.branchId || req.query.branchId;
+  if (!raw) return null;
+  const str = raw.toString();
+  return mongoose.Types.ObjectId.isValid(str) ? new mongoose.Types.ObjectId(str) : null;
 }
 
 async function listCustomers(req, res) {

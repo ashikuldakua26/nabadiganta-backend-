@@ -176,7 +176,8 @@ async function createTransaction(req, res , next) {
 
       return res.status(201).json({ message: "Withdrawal recorded", transaction: { id: withdrawal._id, _id: withdrawal._id, type: "withdrawal", amount: withdrawal.amount, branch: withdrawal.branch, customer: withdrawal.customer, at: withdrawal.withdrawnAt, note: withdrawal.note } });
     }
-  } catch (error) {
+  } catch (error) { 
+    console.log('error: ', error );
     return res.status(500).json({ message: error.message });
   }
 }
@@ -522,9 +523,20 @@ async function listBranches(req, res, next) {
   try {
     const { page, limit, skip } = getPagination(req.query, 20, 100);
     const [branches, total] = await Promise.all([
-      Branch.find().sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Branch.find().sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       Branch.countDocuments(),
     ]);
+
+    // Attach customer counts
+    const branchIds = branches.map((b) => b._id);
+    const counts = await Customer.aggregate([
+      { $match: { branch: { $in: branchIds }, isActive: true } },
+      { $group: { _id: "$branch", count: { $sum: 1 } } },
+    ]);
+    const countMap = {};
+    counts.forEach((c) => { countMap[c._id.toString()] = c.count; });
+    branches.forEach((b) => { b.customerCount = countMap[b._id.toString()] || 0; });
+
     return res.json({ branches, pagination: { page, limit, total } });
   } catch (error) {
     return res.status(500).json({ message: error.message });
@@ -1261,19 +1273,20 @@ async function getDashboardSummary(req, res, next) {
     const days = 7;
     const sinceDate = new Date();
     sinceDate.setDate(sinceDate.getDate() - (days - 1));
+    sinceDate.setHours(0, 0, 0, 0);
 
     const formatDayGroup = {
       $dateToString: { format: "%Y-%m-%d", date: "$transactionDate" },
     };
 
     const depositsTrendAgg = FinancialTransaction.aggregate([
-      { $match: { type: "deposit", transactionDate: { $gte: new Date(sinceDate.setHours(0,0,0,0)) } } },
+      { $match: { type: "deposit", transactionDate: { $gte: sinceDate } } },
       { $group: { _id: formatDayGroup, totalAmount: { $sum: "$amount" }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } },
     ]);
 
     const withdrawalsTrendAgg = FinancialTransaction.aggregate([
-      { $match: { type: "withdrawal", transactionDate: { $gte: new Date(sinceDate.setHours(0,0,0,0)) } } },
+      { $match: { type: "withdrawal", transactionDate: { $gte: sinceDate } } },
       { $group: { _id: formatDayGroup, totalAmount: { $sum: "$amount" }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } },
     ]);
